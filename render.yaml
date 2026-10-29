@@ -12,17 +12,17 @@ services:
       - key: ENVIRONMENT
         value: production
       - key: DEBUG
-        value: false
+        value: "false"
       - key: CORS_ORIGINS
-        value: "http://localhost:3000" # Update with frontend Vercel production domain
+        value: "http://localhost:3000"
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
       - key: GEMINI_TIMEOUT_SECONDS
-        value: 12.0
+        value: "12.0"
       - key: TELEPHONY_PROVIDER
         value: mock
       - key: TELEPHONY_ENABLE_REAL_CALLS
-        value: false
+        value: "false"
       - key: GEMINI_API_KEY
         sync: false
       - key: DATABASE_URL
