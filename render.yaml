@@ -32,6 +32,22 @@ services:
           name: voxora-db
           property: connectionString
 
+  - type: static
+    name: voxora-frontend
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    publishPath: out
+    plan: free
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        value: https://voxora-backend-api.onrender.com
+      - key: NEXT_PUBLIC_APP_ENV
+        value: production
+
 databases:
   - name: voxora-db
     plan: free
