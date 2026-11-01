@@ -32,12 +32,12 @@ services:
           name: voxora-db
           property: connectionString
 
-  - type: static
+  - type: web
     name: voxora-frontend
+    runtime: static
     rootDir: frontend
     buildCommand: npm install && npm run build
-    publishPath: out
-    plan: free
+    staticPublishPath: ./out
     routes:
       - type: rewrite
         source: /*
