@@ -1,86 +1,170 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { AppShell } from "@/components/app-shell";
-import { DemoBanner } from "@/components/ui/demo-banner";
-import { DEMO_VOICE_OPTIONS, INITIAL_AGENT_CONFIG } from "@/lib/mock-data";
-import { AgentConfig } from "@/types";
+import {
+  ENTERPRISE_PERSONA_PRESETS,
+  EnterprisePersonaPreset,
+  DEMO_VOICE_OPTIONS,
+} from "@/lib/mock-data";
+import { fetchSettings, updateSettings } from "@/lib/conversation-api";
+import { SystemSettings } from "@/types";
 import {
   Bot,
   Save,
   Volume2,
   CheckCircle2,
   AlertCircle,
-  Play,
   RotateCcw,
   Sparkles,
+  Zap,
+  Users,
+  Calendar,
+  Headphones,
+  Sliders,
+  Play,
+  Square,
+  Shield,
+  Loader2,
 } from "lucide-react";
 
 export default function AgentConfigPage() {
-  const [config, setConfig] = useState<AgentConfig>(INITIAL_AGENT_CONFIG);
-  const [savedConfig, setSavedConfig] = useState<AgentConfig>(INITIAL_AGENT_CONFIG);
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [selectedPresetId, setSelectedPresetId] = useState<string>("support_priya");
+  const [formData, setFormData] = useState<SystemSettings>({
+    agent_name: "Priya Sharma",
+    custom_instructions: "",
+    language: "en-US",
+    response_style: "balanced",
+    greeting: "Hello! Thank you for contacting Voxora Support. My name is Priya. How may I assist you with your account or service today?",
+    max_history_turns: 10,
+    temperature: 0.5,
+    voice_playback_enabled: true,
+    speech_rate: 1.0,
+    voice_id: null,
+  });
+
+  const [activeDbPersona, setActiveDbPersona] = useState<SystemSettings | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
-  const [isPlayingAudio, setIsPlayingAudio] = useState<string | null>(null);
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  // Fetch persisted settings from real PostgreSQL database on mount
+  useEffect(() => {
+    let mounted = true;
+    async function loadData() {
+      setIsLoading(true);
+      const res = await fetchSettings();
+      if (mounted && res) {
+        setActiveDbPersona(res);
+        setFormData(res);
+
+        // Match active preset if possible
+        const matched = ENTERPRISE_PERSONA_PRESETS.find(
+          (p) => p.name.toLowerCase() === res.agent_name.toLowerCase() || p.displayName.toLowerCase().includes(res.agent_name.toLowerCase())
+        );
+        if (matched) {
+          setSelectedPresetId(matched.id);
+        }
+      }
+      if (mounted) setIsLoading(false);
+    }
+    loadData();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // When a preset card is clicked, populate the form
+  const handleSelectPreset = (preset: EnterprisePersonaPreset) => {
+    setSelectedPresetId(preset.id);
+    setFormData((prev) => ({
+      ...prev,
+      agent_name: preset.name,
+      greeting: preset.greeting,
+      custom_instructions: preset.custom_instructions,
+      response_style: preset.response_style,
+      temperature: preset.temperature,
+      speech_rate: preset.speech_rate,
+      language: preset.language,
+    }));
+    setErrors({});
+  };
+
+  // Audition greeting using browser speech synthesis
+  const handleAuditionGreeting = (text: string, rate: number = 1.0) => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+
+    if (isPlayingAudio) {
+      window.speechSynthesis.cancel();
+      setIsPlayingAudio(false);
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = rate;
+    utterance.pitch = 1.0;
+
+    utterance.onstart = () => setIsPlayingAudio(true);
+    utterance.onend = () => setIsPlayingAudio(false);
+    utterance.onerror = () => setIsPlayingAudio(false);
+
+    window.speechSynthesis.speak(utterance);
+  };
 
   // Validate form inputs
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
-    if (!config.name.trim()) {
-      newErrors.name = "Agent name is required.";
-    } else if (config.name.trim().length < 3) {
-      newErrors.name = "Agent name must be at least 3 characters.";
+    if (!formData.agent_name.trim()) {
+      newErrors.agent_name = "Agent name is required.";
+    } else if (formData.agent_name.trim().length < 2) {
+      newErrors.agent_name = "Agent name must be at least 2 characters.";
     }
 
-    if (!config.greeting.trim()) {
+    if (!formData.greeting.trim()) {
       newErrors.greeting = "A starting greeting phrase is required.";
-    }
-
-    if (!config.instructions.trim()) {
-      newErrors.instructions = "Operational system instructions are required.";
-    } else if (config.instructions.trim().length < 20) {
-      newErrors.instructions = "Instructions must be descriptive (at least 20 characters).";
     }
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!validate()) {
-      setSaveSuccess(false);
-      return;
-    }
+  // Save to persistent database
+  const handleSaveToDatabase = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!validate()) return;
 
-    // Persist to local state
-    setSavedConfig({ ...config });
-    setSaveSuccess(true);
-    setTimeout(() => {
-      setSaveSuccess(false);
-    }, 4000);
-  };
-
-  const handleReset = () => {
-    setConfig({ ...INITIAL_AGENT_CONFIG });
-    setErrors({});
+    setIsSaving(true);
     setSaveSuccess(false);
+
+    const updated = await updateSettings(formData);
+    if (updated) {
+      setActiveDbPersona(updated);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 5000);
+    }
+    setIsSaving(false);
   };
 
-  const selectedVoice =
-    DEMO_VOICE_OPTIONS.find((v) => v.id === config.voiceId) || DEMO_VOICE_OPTIONS[0];
-
-  const handleVoicePreview = (voiceId: string) => {
-    setIsPlayingAudio(voiceId);
-    setTimeout(() => {
-      setIsPlayingAudio(null);
-    }, 2000);
+  const getPresetIcon = (id: string) => {
+    switch (id) {
+      case "support_priya":
+        return <Headphones className="w-5 h-5 text-champagne" />;
+      case "sales_alex":
+        return <Zap className="w-5 h-5 text-champagne" />;
+      case "booking_maya":
+        return <Calendar className="w-5 h-5 text-champagne" />;
+      case "triage_operations":
+        return <Sliders className="w-5 h-5 text-champagne" />;
+      default:
+        return <Bot className="w-5 h-5 text-champagne" />;
+    }
   };
 
   return (
-    <AppShell title="Agent Persona Configuration">
-      <DemoBanner message="DEMO CONFIGURATION CONSOLE — Changes are validated and stored in local component state. Voice models and live telephone binding will be activated in Phases 3 and 4." />
-
+    <AppShell title="AI Agent Personas & Multi-Agent Dispatch">
       {/* Success Notification */}
       {saveSuccess && (
         <div
@@ -89,40 +173,168 @@ export default function AgentConfigPage() {
         >
           <div className="flex items-center space-x-2.5">
             <CheckCircle2 className="w-5 h-5 text-sage" />
-            <span>Agent configuration saved successfully to active local workspace!</span>
+            <span>
+              Persona <strong>&quot;{formData.agent_name}&quot;</strong> has been activated and saved to the live cloud database!
+            </span>
           </div>
           <span className="text-xs font-mono uppercase bg-sage/20 px-2 py-0.5 rounded">
-            Updated
+            Live Active
           </span>
         </div>
       )}
 
+      {/* Hero Header */}
+      <div className="bg-charcoal-200 border border-charcoal-border rounded-lg p-6">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div>
+            <div className="flex items-center space-x-2 text-xs font-mono text-champagne mb-1.5 uppercase tracking-wider">
+              <Sparkles className="w-4 h-4" />
+              <span>Multi-Agent Voice Ecosystem</span>
+            </div>
+            <h1 className="text-xl font-serif font-bold text-ivory">
+              Specialized Enterprise Personas
+            </h1>
+            <p className="text-xs text-ivory-muted mt-1 max-w-2xl">
+              Switch between pre-tuned conversational agents for Customer Support, Outbound Sales, and Appointment Scheduling with 1-click database activation.
+            </p>
+          </div>
+
+          <div className="flex items-center space-x-3">
+            <button
+              type="button"
+              onClick={() => handleAuditionGreeting(formData.greeting, formData.speech_rate)}
+              className="px-4 py-2 rounded text-xs font-mono tracking-wider uppercase border border-champagne/40 bg-charcoal-300 text-champagne hover:bg-champagne/10 transition-colors flex items-center space-x-2"
+            >
+              {isPlayingAudio ? (
+                <>
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                  <span>Stop Audio</span>
+                </>
+              ) : (
+                <>
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>Audition Greeting</span>
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleSaveToDatabase()}
+              disabled={isSaving}
+              className="px-5 py-2 rounded text-xs font-mono tracking-wider uppercase font-semibold bg-champagne text-charcoal hover:bg-champagne-light transition-colors flex items-center space-x-2 shadow-sm disabled:opacity-50"
+            >
+              {isSaving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Activating...</span>
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4" />
+                  <span>Activate Persona</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Preset Personas Selection Cards */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-xs font-mono uppercase tracking-wider text-ivory-muted">
+            1. Select Specialized Agent Preset
+          </span>
+          <span className="text-xs font-mono text-champagne">
+            Active in Database: <strong>{activeDbPersona?.agent_name || "Loading..."}</strong>
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {ENTERPRISE_PERSONA_PRESETS.map((preset) => {
+            const isSelected = selectedPresetId === preset.id;
+            const isLiveInDb = activeDbPersona?.agent_name.toLowerCase().includes(preset.name.toLowerCase());
+
+            return (
+              <div
+                key={preset.id}
+                onClick={() => handleSelectPreset(preset)}
+                className={`p-5 rounded-lg border cursor-pointer transition-all flex flex-col justify-between relative ${
+                  isSelected
+                    ? "bg-charcoal-300 border-champagne shadow-md"
+                    : "bg-charcoal-200 border-charcoal-border hover:border-ivory-muted/40"
+                }`}
+              >
+                {isLiveInDb && (
+                  <div className="absolute top-3 right-3 flex items-center space-x-1 text-[10px] font-mono uppercase text-sage bg-sage/20 border border-sage/40 px-2 py-0.5 rounded-full">
+                    <span className="w-1.5 h-1.5 rounded-full bg-sage animate-pulse" />
+                    <span>Active Live</span>
+                  </div>
+                )}
+
+                <div>
+                  <div className="flex items-center space-x-3 mb-3">
+                    <div className="w-10 h-10 rounded-lg bg-charcoal border border-charcoal-border flex items-center justify-center">
+                      {getPresetIcon(preset.id)}
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-champagne block">
+                        {preset.badge}
+                      </span>
+                      <h3 className="text-sm font-semibold text-ivory">{preset.name}</h3>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-ivory-muted leading-relaxed mb-3">
+                    {preset.description}
+                  </p>
+
+                  <div className="flex flex-wrap gap-1.5 mb-4">
+                    {preset.tags.map((tag) => (
+                      <span
+                        key={tag}
+                        className="text-[10px] font-mono text-ivory-muted bg-charcoal px-2 py-0.5 rounded border border-charcoal-border"
+                      >
+                        {tag}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-charcoal-border flex items-center justify-between text-[11px] font-mono">
+                  <span className="text-ivory-muted capitalize">Style: {preset.response_style}</span>
+                  <span className="text-champagne font-medium">
+                    {isSelected ? "Selected ✓" : "Click to Load"}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Persona Customization & Live Tuning */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main Configuration Form */}
+        {/* Form Fields */}
         <div className="lg:col-span-2 space-y-6">
           <form
-            onSubmit={handleSave}
+            onSubmit={handleSaveToDatabase}
             className="bg-charcoal-200 border border-charcoal-border rounded-lg p-6 space-y-5"
           >
             <div className="border-b border-charcoal-border pb-4 flex items-center justify-between">
               <div>
                 <h2 className="text-base font-serif font-semibold text-ivory">
-                  Core Agent Persona
+                  Tune & Deploy Active Persona
                 </h2>
                 <p className="text-xs text-ivory-muted">
-                  Define how the AI agent identifies itself and speaks during calls.
+                  Custom instructions and prompt directives are merged with server security controls.
                 </p>
               </div>
-              <div className="flex items-center space-x-2">
-                <button
-                  type="button"
-                  onClick={handleReset}
-                  className="px-3 py-1.5 rounded text-xs font-mono text-ivory-muted border border-charcoal-border hover:bg-charcoal-300 hover:text-ivory flex items-center space-x-1.5 transition-colors"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Reset Default</span>
-                </button>
-              </div>
+
+              <span className="text-xs font-mono text-ivory-muted">
+                Engine: <strong className="text-champagne">Gemini 2.5 Flash</strong>
+              </span>
             </div>
 
             {/* Agent Name */}
@@ -136,134 +348,89 @@ export default function AgentConfigPage() {
               <input
                 id="agent-name"
                 type="text"
-                value={config.name}
-                onChange={(e) => setConfig({ ...config, name: e.target.value })}
-                placeholder="e.g. Voxora Enterprise Concierge"
+                value={formData.agent_name}
+                onChange={(e) => setFormData({ ...formData, agent_name: e.target.value })}
+                placeholder="e.g. Priya Sharma (Customer Support Specialist)"
                 className={`w-full px-3.5 py-2.5 rounded bg-charcoal-300 border text-sm text-ivory focus:outline-none transition-colors ${
-                  errors.name
+                  errors.agent_name
                     ? "border-rose-800 focus:border-rose-600"
                     : "border-charcoal-border focus:border-champagne"
                 }`}
               />
-              {errors.name && (
+              {errors.agent_name && (
                 <p className="text-xs text-rose-400 mt-1 flex items-center gap-1">
                   <AlertCircle className="w-3.5 h-3.5" />
-                  <span>{errors.name}</span>
+                  <span>{errors.agent_name}</span>
                 </p>
               )}
             </div>
 
-            {/* Description */}
-            <div>
-              <label
-                htmlFor="agent-desc"
-                className="block text-xs font-mono uppercase tracking-wider text-ivory-muted mb-1.5"
-              >
-                Operational Purpose / Description
-              </label>
-              <input
-                id="agent-desc"
-                type="text"
-                value={config.description}
-                onChange={(e) => setConfig({ ...config, description: e.target.value })}
-                placeholder="Brief internal summary of agent duties"
-                className="w-full px-3.5 py-2.5 rounded bg-charcoal-300 border border-charcoal-border text-sm text-ivory focus:outline-none focus:border-champagne transition-colors"
-              />
-            </div>
-
-            {/* Language & Voice Selector Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Response Style & Language Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
                 <label
-                  htmlFor="agent-language"
+                  htmlFor="agent-style"
                   className="block text-xs font-mono uppercase tracking-wider text-ivory-muted mb-1.5"
                 >
-                  Primary Language
+                  Speaking Cadence
                 </label>
                 <select
-                  id="agent-language"
-                  value={config.language}
-                  onChange={(e) => setConfig({ ...config, language: e.target.value })}
+                  id="agent-style"
+                  value={formData.response_style}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      response_style: e.target.value as "concise" | "balanced" | "detailed",
+                    })
+                  }
                   className="w-full px-3.5 py-2.5 rounded bg-charcoal-300 border border-charcoal-border text-sm text-ivory focus:outline-none focus:border-champagne transition-colors"
                 >
-                  <option value="en-US">English (United States)</option>
-                  <option value="en-GB">English (United Kingdom)</option>
-                  <option value="es-ES">Spanish (European)</option>
-                  <option value="fr-FR">French (Standard)</option>
-                  <option value="de-DE">German (Standard)</option>
+                  <option value="concise">Concise (1-2 sentences)</option>
+                  <option value="balanced">Balanced (2-3 sentences)</option>
+                  <option value="detailed">Detailed (Thorough explain)</option>
                 </select>
               </div>
 
               <div>
                 <label
-                  htmlFor="agent-voice"
+                  htmlFor="agent-temp"
                   className="block text-xs font-mono uppercase tracking-wider text-ivory-muted mb-1.5"
                 >
-                  Acoustic Voice Model
+                  Temperature ({formData.temperature})
                 </label>
-                <select
-                  id="agent-voice"
-                  value={config.voiceId}
-                  onChange={(e) => setConfig({ ...config, voiceId: e.target.value })}
-                  className="w-full px-3.5 py-2.5 rounded bg-charcoal-300 border border-charcoal-border text-sm text-ivory focus:outline-none focus:border-champagne transition-colors"
-                >
-                  {DEMO_VOICE_OPTIONS.map((voice) => (
-                    <option key={voice.id} value={voice.id}>
-                      {voice.name} — {voice.accent}
-                    </option>
-                  ))}
-                </select>
+                <input
+                  id="agent-temp"
+                  type="range"
+                  min="0.1"
+                  max="1.0"
+                  step="0.05"
+                  value={formData.temperature}
+                  onChange={(e) =>
+                    setFormData({ ...formData, temperature: parseFloat(e.target.value) })
+                  }
+                  className="w-full h-9 accent-champagne cursor-pointer"
+                />
               </div>
-            </div>
 
-            {/* Voice Samples Selection Cards */}
-            <div>
-              <span className="block text-xs font-mono uppercase tracking-wider text-ivory-muted mb-2">
-                Available Voice Profiles (Demo Preview)
-              </span>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {DEMO_VOICE_OPTIONS.map((v) => {
-                  const isSelected = v.id === config.voiceId;
-                  const isPlaying = isPlayingAudio === v.id;
-                  return (
-                    <div
-                      key={v.id}
-                      onClick={() => setConfig({ ...config, voiceId: v.id })}
-                      className={`p-3 rounded border cursor-pointer transition-all flex flex-col justify-between ${
-                        isSelected
-                          ? "bg-charcoal-300 border-champagne text-ivory"
-                          : "bg-charcoal-100 border-charcoal-border hover:border-ivory-muted/40 text-ivory-muted"
-                      }`}
-                    >
-                      <div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-medium text-ivory">{v.name}</span>
-                          <span className="text-[10px] font-mono text-champagne bg-champagne-subtle px-1.5 py-0.5 rounded">
-                            {v.accent}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-ivory-muted mt-1 leading-snug">{v.style}</p>
-                      </div>
-
-                      <div className="mt-2.5 pt-2 border-t border-charcoal-border flex items-center justify-between">
-                        <span className="text-[10px] font-mono text-ivory-muted uppercase">
-                          {v.gender}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleVoicePreview(v.id);
-                          }}
-                          className="px-2 py-0.5 rounded text-[11px] font-mono text-champagne hover:bg-charcoal-300 flex items-center space-x-1"
-                        >
-                          <Volume2 className="w-3 h-3" />
-                          <span>{isPlaying ? "Simulating..." : "Audition"}</span>
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+              <div>
+                <label
+                  htmlFor="agent-rate"
+                  className="block text-xs font-mono uppercase tracking-wider text-ivory-muted mb-1.5"
+                >
+                  Speech Rate ({formData.speech_rate}x)
+                </label>
+                <input
+                  id="agent-rate"
+                  type="range"
+                  min="0.8"
+                  max="1.3"
+                  step="0.05"
+                  value={formData.speech_rate}
+                  onChange={(e) =>
+                    setFormData({ ...formData, speech_rate: parseFloat(e.target.value) })
+                  }
+                  className="w-full h-9 accent-champagne cursor-pointer"
+                />
               </div>
             </div>
 
@@ -276,16 +443,21 @@ export default function AgentConfigPage() {
                 >
                   Opening Greeting Phrase *
                 </label>
-                <span className="text-[11px] font-mono text-ivory-muted">
-                  Spoken upon call connect
-                </span>
+                <button
+                  type="button"
+                  onClick={() => handleAuditionGreeting(formData.greeting, formData.speech_rate)}
+                  className="text-xs font-mono text-champagne hover:underline flex items-center space-x-1"
+                >
+                  <Volume2 className="w-3.5 h-3.5" />
+                  <span>Preview Audio</span>
+                </button>
               </div>
               <textarea
                 id="agent-greeting"
                 rows={3}
-                value={config.greeting}
-                onChange={(e) => setConfig({ ...config, greeting: e.target.value })}
-                placeholder="Spoken as soon as telephony audio stream begins..."
+                value={formData.greeting}
+                onChange={(e) => setFormData({ ...formData, greeting: e.target.value })}
+                placeholder="Spoken as soon as a telephone or web voice conversation initiates..."
                 className={`w-full px-3.5 py-2.5 rounded bg-charcoal-300 border text-sm text-ivory focus:outline-none transition-colors ${
                   errors.greeting
                     ? "border-rose-800 focus:border-rose-600"
@@ -307,114 +479,112 @@ export default function AgentConfigPage() {
                   htmlFor="agent-instructions"
                   className="block text-xs font-mono uppercase tracking-wider text-ivory-muted"
                 >
-                  Operational System Instructions (LLM Prompt) *
+                  Role Directives & Domain Knowledge
                 </label>
                 <span className="text-[11px] font-mono text-ivory-muted">
-                  Cadence, escalation, policy rules
+                  Guidance for Gemini
                 </span>
               </div>
               <textarea
                 id="agent-instructions"
-                rows={7}
-                value={config.instructions}
-                onChange={(e) => setConfig({ ...config, instructions: e.target.value })}
-                placeholder="Specify precise behavior rules, turn-taking cadence, and call completion standards..."
-                className={`w-full px-3.5 py-2.5 rounded bg-charcoal-300 border text-sm text-ivory font-mono text-xs focus:outline-none transition-colors leading-relaxed ${
-                  errors.instructions
-                    ? "border-rose-800 focus:border-rose-600"
-                    : "border-charcoal-border focus:border-champagne"
-                }`}
+                rows={6}
+                value={formData.custom_instructions || ""}
+                onChange={(e) => setFormData({ ...formData, custom_instructions: e.target.value })}
+                placeholder="Specify precise behavior rules, turn-taking cadence, FAQ answers, or scheduling policy..."
+                className="w-full px-3.5 py-2.5 rounded bg-charcoal-300 border border-charcoal-border text-sm text-ivory font-mono text-xs focus:outline-none focus:border-champagne transition-colors leading-relaxed"
               />
-              {errors.instructions && (
-                <p className="text-xs text-rose-400 mt-1 flex items-center gap-1">
-                  <AlertCircle className="w-3.5 h-3.5" />
-                  <span>{errors.instructions}</span>
-                </p>
-              )}
             </div>
 
             {/* Action Bar */}
-            <div className="pt-3 border-t border-charcoal-border flex items-center justify-end space-x-3">
+            <div className="pt-3 border-t border-charcoal-border flex items-center justify-between">
+              <span className="text-xs text-ivory-muted">
+                Changes persist across Voice Playground and Outbound Calls.
+              </span>
               <button
                 type="submit"
-                className="px-5 py-2.5 rounded text-xs font-mono tracking-wider uppercase font-semibold bg-champagne text-charcoal hover:bg-champagne-light transition-colors flex items-center space-x-2 focus:outline-none focus:ring-2 focus:ring-champagne"
+                disabled={isSaving}
+                className="px-6 py-2.5 rounded text-xs font-mono tracking-wider uppercase font-semibold bg-champagne text-charcoal hover:bg-champagne-light transition-colors flex items-center space-x-2 focus:outline-none focus:ring-2 focus:ring-champagne disabled:opacity-50"
               >
-                <Save className="w-4 h-4" />
-                <span>Save Agent Settings</span>
+                {isSaving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4" />
+                    <span>Save & Deploy Persona</span>
+                  </>
+                )}
               </button>
             </div>
           </form>
         </div>
 
-        {/* Live Profile Staging Preview */}
+        {/* Live Active Persona Card */}
         <div className="space-y-6">
           <div className="bg-charcoal-200 border border-charcoal-border rounded-lg p-5 space-y-4">
             <div className="flex items-center justify-between border-b border-charcoal-border pb-3">
               <div className="flex items-center space-x-2">
                 <Bot className="w-4 h-4 text-champagne" />
                 <h3 className="text-xs uppercase font-mono tracking-wider text-ivory font-semibold">
-                  Active Configuration Preview
+                  Live Staged Persona
                 </h3>
               </div>
               <span className="text-[10px] font-mono text-sage bg-sage-subtle border border-sage/30 px-2 py-0.5 rounded">
-                Verified Local State
+                PostgreSQL Synced
               </span>
             </div>
 
             <div className="space-y-3 text-xs">
               <div>
                 <span className="text-[11px] font-mono uppercase text-ivory-muted block">
-                  Designated Name
+                  Designated Persona
                 </span>
                 <span className="text-sm font-serif font-medium text-ivory">
-                  {savedConfig.name || "Untitled Agent"}
+                  {formData.agent_name || "Untitled Agent"}
                 </span>
               </div>
 
               <div>
                 <span className="text-[11px] font-mono uppercase text-ivory-muted block">
-                  Acoustic Profile
+                  Response Style
                 </span>
-                <span className="text-ivory font-medium">
-                  {selectedVoice.name} ({selectedVoice.accent})
+                <span className="text-ivory font-medium capitalize">
+                  {formData.response_style} (Temp: {formData.temperature})
                 </span>
-                <p className="text-[11px] text-ivory-muted mt-0.5">{selectedVoice.style}</p>
               </div>
 
               <div>
                 <span className="text-[11px] font-mono uppercase text-ivory-muted block">
-                  Language Model Locale
+                  Language Locale
                 </span>
-                <span className="text-ivory font-mono">{savedConfig.language}</span>
+                <span className="text-ivory font-mono">{formData.language}</span>
               </div>
 
               <div className="pt-2 border-t border-charcoal-border">
                 <span className="text-[11px] font-mono uppercase text-ivory-muted block mb-1">
-                  Simulated Opening Line
+                  Active Greeting Phrase
                 </span>
                 <div className="p-3 bg-charcoal-300 rounded border border-charcoal-border italic text-ivory leading-relaxed text-xs">
-                  &ldquo;{savedConfig.greeting}&rdquo;
+                  &ldquo;{formData.greeting}&rdquo;
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Demo Call Sandbox Notice */}
+          {/* Security Guardrail Directives */}
           <div className="bg-charcoal-200 border border-charcoal-border rounded-lg p-5 space-y-3">
             <div className="flex items-center space-x-2 text-xs font-mono text-champagne">
-              <Sparkles className="w-4 h-4" />
-              <span className="font-semibold">Interactive Sandbox Preview</span>
+              <Shield className="w-4 h-4" />
+              <span className="font-semibold">Immutable Safety Guardrails</span>
             </div>
             <p className="text-xs text-ivory-muted leading-relaxed">
-              Real-time Web Audio capture and live conversational speech-to-speech interaction will be hooked up to the Gemini Live API in Phase 3. Real telephone dispatching will occur in Phase 4.
+              Every persona automatically inherits platform safety rules: emergency calls are strictly blocked, prompt injection overrides are rejected, and transparency that this is an AI agent is permanently enforced.
             </p>
-            <div className="p-3 rounded bg-charcoal-300 border border-charcoal-border text-[11px] font-mono text-ivory-muted">
-              Live Phone Call Status: Standby (Not Initiated)
-            </div>
           </div>
         </div>
       </div>
     </AppShell>
   );
 }
-

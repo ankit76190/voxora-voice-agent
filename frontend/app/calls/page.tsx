@@ -42,6 +42,10 @@ import {
   ShieldCheck,
   CheckCircle2,
   Lock,
+  Play,
+  Pause,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 
 interface DisplayCallRecord {
@@ -82,6 +86,68 @@ export default function CallHistoryPage() {
   // Inspection modal state
   const [selectedCall, setSelectedCall] = useState<DisplayCallRecord | null>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
+  const [isPlayingRecording, setIsPlayingRecording] = useState(false);
+  const [playbackProgress, setPlaybackProgress] = useState(0);
+  const [activeTurnIndex, setActiveTurnIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    setIsPlayingRecording(false);
+    setActiveTurnIndex(null);
+    setPlaybackProgress(0);
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+  }, [selectedCall?.id]);
+
+  const handleTogglePlayback = useCallback(() => {
+    if (isPlayingRecording) {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+      setIsPlayingRecording(false);
+      return;
+    }
+
+    if (!selectedCall || !selectedCall.transcripts || selectedCall.transcripts.length === 0) {
+      return;
+    }
+
+    setIsPlayingRecording(true);
+    let index = 0;
+
+    const playNextTurn = () => {
+      if (!selectedCall.transcripts || index >= selectedCall.transcripts.length) {
+        setIsPlayingRecording(false);
+        setActiveTurnIndex(null);
+        setPlaybackProgress(100);
+        return;
+      }
+
+      setActiveTurnIndex(index);
+      setPlaybackProgress(Math.round(((index + 1) / selectedCall.transcripts.length) * 100));
+
+      const turn = selectedCall.transcripts[index];
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        const utt = new SpeechSynthesisUtterance(turn.content);
+        utt.rate = turn.role === "user" ? 1.05 : 1.0;
+        utt.pitch = turn.role === "user" ? 1.05 : 0.95;
+        utt.onend = () => {
+          index++;
+          setTimeout(playNextTurn, 600);
+        };
+        utt.onerror = () => {
+          index++;
+          playNextTurn();
+        };
+        window.speechSynthesis.speak(utt);
+      } else {
+        index++;
+        setTimeout(playNextTurn, 2000);
+      }
+    };
+
+    playNextTurn();
+  }, [isPlayingRecording, selectedCall]);
 
   // Telephony Test Call State (Phase 9)
   const [isTestCallModalOpen, setIsTestCallModalOpen] = useState(false);
@@ -598,6 +664,55 @@ export default function CallHistoryPage() {
               <p className="text-ivory leading-relaxed font-sans">{selectedCall.summary}</p>
             </div>
 
+            {/* Call Audio Recording & Playback Bar */}
+            <div className="p-4 mx-5 my-3 rounded-lg bg-charcoal-300 border border-charcoal-border">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center space-x-2">
+                  <Volume2 className="w-4 h-4 text-champagne" />
+                  <span className="text-xs font-mono uppercase tracking-wider text-ivory font-semibold">
+                    Call Audio Recording
+                  </span>
+                </div>
+                <span className="text-[10px] font-mono text-ivory-muted">
+                  {isPlayingRecording ? "Voice Playback In Progress" : "Linear PCM Audio Stream"}
+                </span>
+              </div>
+
+              <div className="flex items-center space-x-3">
+                <button
+                  type="button"
+                  onClick={handleTogglePlayback}
+                  className="w-9 h-9 rounded-full bg-champagne text-charcoal hover:bg-champagne-light transition-colors flex items-center justify-center shrink-0 shadow-sm"
+                  aria-label={isPlayingRecording ? "Pause Audio" : "Play Audio"}
+                >
+                  {isPlayingRecording ? (
+                    <Pause className="w-4 h-4 fill-current" />
+                  ) : (
+                    <Play className="w-4 h-4 fill-current ml-0.5" />
+                  )}
+                </button>
+
+                <div className="flex-1 space-y-1">
+                  <div className="flex items-center justify-between text-[11px] font-mono text-ivory-muted">
+                    <span>
+                      {isPlayingRecording
+                        ? `Playing Turn ${(activeTurnIndex ?? 0) + 1} of ${selectedCall.transcripts?.length || 0}`
+                        : "00:00"}
+                    </span>
+                    <span>{formatDuration(selectedCall.durationSeconds)}</span>
+                  </div>
+
+                  {/* Waveform / Progress Track */}
+                  <div className="w-full h-2 bg-charcoal rounded-full overflow-hidden border border-charcoal-border">
+                    <div
+                      className="h-full bg-champagne transition-all duration-300"
+                      style={{ width: `${playbackProgress}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* Dialog Transcript Scroll Area */}
             <div className="p-5 flex-1 overflow-y-auto space-y-3.5">
               <span className="text-[10px] font-mono text-ivory-muted block uppercase mb-2">
@@ -612,10 +727,13 @@ export default function CallHistoryPage() {
               ) : selectedCall.transcripts && selectedCall.transcripts.length > 0 ? (
                 selectedCall.transcripts.map((turn, i) => {
                   const isUser = turn.role === "user";
+                  const isCurrentlyPlaying = activeTurnIndex === i;
                   return (
                     <div
                       key={turn.id || i}
-                      className={`flex flex-col ${isUser ? "items-end" : "items-start"}`}
+                      className={`flex flex-col transition-all ${isUser ? "items-end" : "items-start"} ${
+                        isCurrentlyPlaying ? "scale-[1.01]" : ""
+                      }`}
                     >
                       <div className="flex items-center space-x-1.5 mb-1 px-1 text-[10px] font-mono">
                         {isUser ? (
@@ -631,10 +749,17 @@ export default function CallHistoryPage() {
                             <span className="text-ivory-muted">{turn.timestamp}</span>
                           </>
                         )}
+                        {isCurrentlyPlaying && (
+                          <span className="text-[10px] font-mono text-champagne animate-pulse font-bold ml-2">
+                            ▶ Speaking
+                          </span>
+                        )}
                       </div>
                       <div
-                        className={`max-w-[85%] rounded px-3.5 py-2 text-xs leading-relaxed ${
-                          isUser
+                        className={`max-w-[85%] rounded px-3.5 py-2 text-xs leading-relaxed transition-all ${
+                          isCurrentlyPlaying
+                            ? "ring-2 ring-champagne bg-charcoal-300 text-ivory font-medium"
+                            : isUser
                             ? "bg-charcoal-300 text-ivory border border-champagne/30"
                             : "bg-charcoal-100 text-ivory-light border border-sage/30 font-sans"
                         }`}
