@@ -16,15 +16,21 @@ services:
       - key: DEBUG
         value: "false"
       - key: CORS_ORIGINS
-        value: "http://localhost:3000"
+        value: "http://localhost:3000,https://voxora-frontend.onrender.com"
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
       - key: GEMINI_TIMEOUT_SECONDS
         value: "12.0"
       - key: TELEPHONY_PROVIDER
-        value: mock
+        value: twilio
       - key: TELEPHONY_ENABLE_REAL_CALLS
-        value: "false"
+        value: "true"
+      - key: TELEPHONY_PHONE_NUMBER
+        value: "+17372508034"
+      - key: TELEPHONY_ACCOUNT_SID
+        sync: false
+      - key: TELEPHONY_AUTH_TOKEN
+        sync: false
       - key: GEMINI_API_KEY
         sync: false
       - key: DATABASE_URL
