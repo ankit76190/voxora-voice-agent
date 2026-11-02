@@ -61,9 +61,8 @@ class TwilioTelephonyProvider(BaseTelephonyProvider):
         post_data = {
             "To": to_number,
             "From": effective_from,
+            "Url": webhook_url or "https://webhooks.twilio.com/v1/Voice/Template/voice_speech_recognition",
         }
-        if webhook_url:
-            post_data["Url"] = webhook_url
 
         data_encoded = urllib.parse.urlencode(post_data).encode("utf-8")
         req = urllib.request.Request(url, data=data_encoded, method="POST")
