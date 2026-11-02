@@ -94,7 +94,8 @@ def get_gemini_client() -> genai.Client:
             "Gemini API key is not configured on the Voxora server. "
             "Please configure a valid GEMINI_API_KEY in backend/.env."
         )
-    return genai.Client(api_key=settings.GEMINI_API_KEY)
+    clean_key = settings.GEMINI_API_KEY.strip().strip("'\"")
+    return genai.Client(api_key=clean_key)
 
 
 def build_contents(message: str, history: List[ChatMessage]) -> List[types.Content]:
@@ -192,8 +193,34 @@ async def generate_conversation_reply(
         if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
             raise GeminiRateLimitError("Gemini API rate limit or quota exceeded. Please retry after a brief pause.")
 
-        if "403" in err_msg or "API_KEY_INVALID" in err_msg or "unregistered" in err_msg.lower():
-            raise GeminiConfigError("Invalid or unauthorized Gemini API key provided in server configuration.")
+        if "403" in err_msg or "API_KEY_INVALID" in err_msg or "unregistered" in err_msg.lower() or "not found" in err_msg.lower():
+            raise GeminiConfigError(f"Gemini API configuration or key error: {err_msg[:120]}")
 
-        raise GeminiUpstreamError("Upstream AI service encountered an error processing the conversation.")
+        # Attempt fallback to gemini-1.5-flash if model name was unrecognized
+        if "404" in err_msg or "NOT_FOUND" in err_msg or "model" in err_msg.lower():
+            try:
+                logger.info("Attempting fallback to gemini-1.5-flash...")
+                loop = asyncio.get_running_loop()
+                fallback_resp = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: client.models.generate_content(
+                            model="gemini-1.5-flash",
+                            contents=contents,
+                            config=config,
+                        ),
+                    ),
+                    timeout=settings.GEMINI_TIMEOUT_SECONDS,
+                )
+                fallback_text = fallback_resp.text.strip() if fallback_resp and fallback_resp.text else ""
+                if fallback_text:
+                    return ConversationResponse(
+                        response=fallback_text,
+                        model="gemini-1.5-flash",
+                        status="success",
+                    )
+            except Exception as fb_exc:
+                logger.error("Fallback to gemini-1.5-flash also failed: %s", fb_exc)
+
+        raise GeminiUpstreamError(f"Upstream AI service error: {err_msg[:150]}")
 
