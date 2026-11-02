@@ -11,6 +11,8 @@ import {
   fetchTelephonyConfig,
   initiateTelephonyCall,
   terminateTelephonyCall,
+  analyzeCallSession,
+  CallAnalysisResult,
 } from "@/lib/conversation-api";
 import {
   PersistedCallSession,
@@ -89,15 +91,38 @@ export default function CallHistoryPage() {
   const [isPlayingRecording, setIsPlayingRecording] = useState(false);
   const [playbackProgress, setPlaybackProgress] = useState(0);
   const [activeTurnIndex, setActiveTurnIndex] = useState<number | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisMeta, setAnalysisMeta] = useState<CallAnalysisResult | null>(null);
 
   useEffect(() => {
     setIsPlayingRecording(false);
     setActiveTurnIndex(null);
     setPlaybackProgress(0);
+    setAnalysisMeta(null);
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
     }
   }, [selectedCall?.id]);
+
+  const handleAnalyzeCall = async () => {
+    if (!selectedCall || !selectedCall.isPersisted) return;
+    setIsAnalyzing(true);
+    const res = await analyzeCallSession(selectedCall.id);
+    setIsAnalyzing(false);
+    if (res.success && res.data) {
+      setAnalysisMeta(res.data);
+      setSelectedCall((prev) =>
+        prev
+          ? {
+              ...prev,
+              summary: res.data!.summary,
+              sentiment: res.data!.sentiment,
+            }
+          : null
+      );
+      loadPersistedCalls();
+    }
+  };
 
   const handleTogglePlayback = useCallback(() => {
     if (isPlayingRecording) {
@@ -658,10 +683,54 @@ export default function CallHistoryPage() {
 
             {/* Summary Block */}
             <div className="px-5 py-3 border-b border-charcoal-border bg-charcoal-300/20 text-xs">
-              <span className="text-[10px] font-mono text-ivory-muted block uppercase mb-1">
-                Conversational Turn Summary
-              </span>
-              <p className="text-ivory leading-relaxed font-sans">{selectedCall.summary}</p>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[10px] font-mono text-ivory-muted uppercase">
+                  Conversational Turn Summary
+                </span>
+                {selectedCall.isPersisted && (
+                  <button
+                    type="button"
+                    onClick={handleAnalyzeCall}
+                    disabled={isAnalyzing}
+                    className="px-2 py-0.5 rounded text-[10px] font-mono uppercase tracking-wider bg-champagne/10 text-champagne hover:bg-champagne/20 border border-champagne/30 transition-colors flex items-center space-x-1"
+                  >
+                    <Sparkles className={`w-3 h-3 ${isAnalyzing ? "animate-spin" : ""}`} />
+                    <span>{isAnalyzing ? "Analyzing..." : "✨ Analyze with Gemini"}</span>
+                  </button>
+                )}
+              </div>
+              <p className="text-ivory leading-relaxed font-sans">{selectedCall.summary || "No turn summary recorded."}</p>
+
+              {analysisMeta && (
+                <div className="mt-3 pt-2.5 border-t border-charcoal-border/60 space-y-2">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-[10px] font-mono text-ivory-muted uppercase">Key Topics:</span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {analysisMeta.key_topics?.map((topic, idx) => (
+                        <span
+                          key={idx}
+                          className="px-2 py-0.5 rounded text-[10px] font-mono bg-charcoal-300 text-champagne border border-champagne/30"
+                        >
+                          #{topic}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {analysisMeta.action_items?.length > 0 && (
+                    <div className="mt-2 text-[11px] text-ivory-muted">
+                      <span className="font-mono text-champagne text-[10px] uppercase block mb-1">
+                        AI Recommended Action Items:
+                      </span>
+                      <ul className="list-disc list-inside space-y-0.5 text-ivory">
+                        {analysisMeta.action_items.map((item, idx) => (
+                          <li key={idx}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Call Audio Recording & Playback Bar */}

@@ -123,3 +123,24 @@ class CallService:
         items = list(result.scalars().all())
         return items, total
 
+    @staticmethod
+    async def analyze_call(db: AsyncSession, call_id: str) -> Optional[Tuple[CallSession, dict]]:
+        session = await CallService.get_call(db, call_id)
+        if not session:
+            return None
+
+        transcripts = []
+        if session.transcripts:
+            for t in session.transcripts:
+                transcripts.append({"speaker": t.speaker, "text": t.text})
+
+        from app.services.gemini_service import analyze_call_transcript
+        analysis = await analyze_call_transcript(transcripts, agent_name=session.agent_name)
+
+        session.summary = analysis.get("summary")
+        session.sentiment = analysis.get("sentiment", "Neutral")
+        await db.commit()
+        await db.refresh(session)
+        return session, analysis
+
+

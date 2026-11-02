@@ -10,6 +10,7 @@ from app.schemas.call import (
     CallSessionUpdate,
     CallSessionResponse,
     PaginatedCallResponse,
+    CallAnalysisResponse,
 )
 from app.services.call_service import CallService
 
@@ -144,4 +145,44 @@ async def complete_call(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to finalize call session: {str(exc)}",
         )
+
+
+@router.post(
+    "/{call_id}/analyze",
+    response_model=CallAnalysisResponse,
+    summary="Analyze Call Session with Gemini AI",
+)
+async def analyze_call(
+    call_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> CallAnalysisResponse:
+    """
+    Performs AI post-call analysis using Gemini 2.5 Flash on the session transcripts.
+    Generates an executive summary, sentiment analysis, key topics, and action items,
+    persisting the results directly to the CallSession record.
+    """
+    try:
+        result = await CallService.analyze_call(db, call_id)
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Call session with ID '{call_id}' not found.",
+            )
+        session, analysis = result
+        return CallAnalysisResponse(
+            call_id=session.id,
+            summary=analysis.get("summary", ""),
+            sentiment=analysis.get("sentiment", "Neutral"),
+            key_topics=analysis.get("key_topics", []),
+            action_items=analysis.get("action_items", []),
+            call=CallSessionResponse.model_validate(session),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to analyze call session with AI: {str(exc)}",
+        )
+
 

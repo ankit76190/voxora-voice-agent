@@ -701,3 +701,38 @@ export async function terminateTelephonyCall(
     return null;
   }
 }
+
+
+export interface CallAnalysisResult {
+  call_id: string;
+  summary: string;
+  sentiment: string;
+  key_topics: string[];
+  action_items: string[];
+  call: PersistedCallSession;
+}
+
+/**
+ * Analyzes call session dialogue using Gemini AI.
+ */
+export async function analyzeCallSession(
+  callId: string
+): Promise<{ success: boolean; data?: CallAnalysisResult; error?: string }> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/v1/calls/${callId}/analyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(15000),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return {
+        success: false,
+        error: data.detail || `AI analysis failed (HTTP ${res.status})`,
+      };
+    }
+    return { success: true, data };
+  } catch (err: any) {
+    return { success: false, error: err?.message || "Failed to analyze call with AI." };
+  }
+}

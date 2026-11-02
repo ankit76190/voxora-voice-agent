@@ -70,3 +70,13 @@ class PaginatedCallResponse(BaseModel):
     page: int
     page_size: int
     total_pages: int
+
+
+class CallAnalysisResponse(BaseModel):
+    call_id: str
+    summary: str
+    sentiment: str
+    key_topics: List[str] = []
+    action_items: List[str] = []
+    call: CallSessionResponse
+
