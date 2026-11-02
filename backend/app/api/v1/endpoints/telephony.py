@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -115,4 +115,35 @@ async def telephony_status_webhook(
         content=f"<Response><!-- {message} --></Response>",
         media_type="application/xml",
     )
+
+
+@router.api_route(
+    "/twiml/outbound",
+    methods=["GET", "POST"],
+    summary="Dynamic Outbound TwiML Voice Webhook",
+)
+async def telephony_outbound_twiml(
+    contact: Optional[str] = "Valued Customer",
+    agent: Optional[str] = "Voxora AI Concierge",
+):
+    """
+    Returns TwiML instructions for Twilio when an outbound call is answered.
+    Greets the recipient using neural text-to-speech with persona context.
+    """
+    greeting = (
+        f"Hello {contact}! Welcome to Voxora AI Enterprise Voice. "
+        f"I am {agent}, your active AI assistant. "
+        f"This live test confirms your telephony carrier integration is operational. "
+        f"Thank you for choosing Voxora. Have a wonderful day!"
+    )
+    xml_content = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Response>\n'
+        f'    <Say voice="Polly.Aditi" language="en-IN">{greeting}</Say>\n'
+        '    <Pause length="1"/>\n'
+        '    <Hangup/>\n'
+        '</Response>'
+    )
+    return Response(content=xml_content, media_type="application/xml")
+
 

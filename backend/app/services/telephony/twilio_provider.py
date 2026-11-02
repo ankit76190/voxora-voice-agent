@@ -58,10 +58,23 @@ class TwilioTelephonyProvider(BaseTelephonyProvider):
         url = f"https://api.twilio.com/2010-04-01/Accounts/{self.account_sid}/Calls.json"
         effective_from = from_number or self.from_number
 
+        target_url = webhook_url
+        if not target_url:
+            query_parts = []
+            if metadata:
+                contact = metadata.get("contact_name")
+                agent = metadata.get("agent_name")
+                if contact and contact != "PSTN Recipient":
+                    query_parts.append(f"contact={urllib.parse.quote(str(contact))}")
+                if agent:
+                    query_parts.append(f"agent={urllib.parse.quote(str(agent))}")
+            query_str = f"?{'&'.join(query_parts)}" if query_parts else ""
+            target_url = f"https://voxora-backend-api.onrender.com/api/v1/telephony/twiml/outbound{query_str}"
+
         post_data = {
             "To": to_number,
             "From": effective_from,
-            "Url": webhook_url or "https://webhooks.twilio.com/v1/Voice/Template/voice_speech_recognition",
+            "Url": target_url,
         }
 
         data_encoded = urllib.parse.urlencode(post_data).encode("utf-8")
