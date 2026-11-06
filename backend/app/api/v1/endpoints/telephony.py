@@ -1,6 +1,10 @@
-from typing import Any, Dict, Optional
+import logging
+import urllib.parse
+from typing import Any, Dict, Optional, List
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from app.db import get_db
 from app.schemas.telephony import (
@@ -120,31 +124,185 @@ async def telephony_status_webhook(
 @router.api_route(
     "/twiml/outbound",
     methods=["GET", "POST"],
-    summary="Dynamic Outbound TwiML Voice Webhook",
+    summary="Dynamic Outbound TwiML Voice Webhook with Interactive Speech Loop",
 )
 async def telephony_outbound_twiml(
     contact: Optional[str] = "Valued Customer",
-    agent: Optional[str] = "Voxora AI Concierge",
+    agent: Optional[str] = "Priya Sharma",
 ):
     """
-    Returns TwiML instructions for Twilio when an outbound call is answered.
-    Greets the recipient using neural text-to-speech with persona context.
+    Returns interactive TwiML instructions for Twilio when an outbound call is answered.
+    Greets the recipient using neural text-to-speech with persona context and prompts
+    for caller speech input to start bidirectional conversation.
     """
     greeting = (
-        f"Hello {contact}! Welcome to Voxora AI Enterprise Voice. "
-        f"I am {agent}, your active AI assistant. "
-        f"This live test confirms your telephony carrier integration is operational. "
-        f"Thank you for choosing Voxora. Have a wonderful day!"
+        f"Hello {contact}! I am {agent}, your AI voice assistant from Voxora. "
+        f"How can I assist you with your operations or inquiries today?"
     )
+    turn_action = f"https://voxora-backend-api.onrender.com/api/v1/telephony/twiml/conversation-turn?agent={urllib.parse.quote(str(agent))}"
     xml_content = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<Response>\n'
         f'    <Say voice="Polly.Aditi" language="en-IN">{greeting}</Say>\n'
-        '    <Pause length="1"/>\n'
+        f'    <Gather input="speech" timeout="4" speechTimeout="auto" action="{turn_action}" method="POST">\n'
+        '        <Pause length="1"/>\n'
+        '    </Gather>\n'
+        '    <Say voice="Polly.Aditi" language="en-IN">\n'
+        '        I didn\'t hear a response. Thank you for connecting with Voxora. Have a wonderful day. Goodbye!\n'
+        '    </Say>\n'
         '    <Hangup/>\n'
         '</Response>'
     )
     return Response(content=xml_content, media_type="application/xml")
+
+
+@router.api_route(
+    "/twiml/conversation-turn",
+    methods=["GET", "POST"],
+    summary="Interactive Telephony Conversation Turn with Gemini AI",
+)
+async def telephony_conversation_turn(
+    request: Request,
+    agent: Optional[str] = "Priya Sharma",
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Processes real-time spoken audio transcripts from phone calls via Twilio <Gather>.
+    Sends the user query and dialogue history to Gemini 2.5 Flash, logs the turn into
+    PostgreSQL CallSession transcripts, and returns the spoken AI response looping for the next turn.
+    """
+    from datetime import datetime, timezone
+    from xml.sax.saxutils import escape as xml_escape
+    from sqlalchemy import select
+    from app.db.models import CallSession, TranscriptItemModel
+    from app.schemas.conversation import ChatMessage
+    from app.services.gemini_service import (
+        generate_conversation_reply,
+        compose_system_instruction,
+    )
+
+    call_sid = None
+    speech_result = ""
+    try:
+        if request.method == "POST":
+            form = await request.form()
+            call_sid = form.get("CallSid")
+            speech_result = form.get("SpeechResult", "").strip()
+        else:
+            call_sid = request.query_params.get("CallSid")
+            speech_result = request.query_params.get("SpeechResult", "").strip()
+    except Exception:
+        pass
+
+    # Check for empty speech or silence
+    if not speech_result:
+        xml_content = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<Response>\n'
+            '    <Say voice="Polly.Aditi" language="en-IN">\n'
+            '        Thank you for speaking with Voxora. Have a wonderful day. Goodbye!\n'
+            '    </Say>\n'
+            '    <Hangup/>\n'
+            '</Response>'
+        )
+        return Response(content=xml_content, media_type="application/xml")
+
+    # Detect exit phrases
+    lower_speech = speech_result.lower()
+    exit_triggers = ["goodbye", "bye", "hang up", "exit", "stop call", "end call", "no thank you", "that's all"]
+    if any(trigger in lower_speech for trigger in exit_triggers):
+        xml_content = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<Response>\n'
+            '    <Say voice="Polly.Aditi" language="en-IN">\n'
+            '        Thank you for your time with Voxora. Have a great day ahead. Goodbye!\n'
+            '    </Say>\n'
+            '    <Hangup/>\n'
+            '</Response>'
+        )
+        return Response(content=xml_content, media_type="application/xml")
+
+    # Find or update active call session in DB
+    session = None
+    history_messages: List[ChatMessage] = []
+    seq = 0
+    now_str = datetime.now(timezone.utc).strftime("%H:%M:%S")
+
+    if call_sid:
+        res = await db.execute(
+            select(CallSession).where(CallSession.provider_call_id == call_sid)
+        )
+        session = res.scalar_one_or_none()
+
+    if session and session.transcripts:
+        seq = len(session.transcripts)
+        for t in session.transcripts:
+            r = "user" if t.role == "user" else "model"
+            history_messages.append(ChatMessage(role=r, content=t.content))
+
+    # Append user turn in DB if session found
+    if session:
+        user_turn = TranscriptItemModel(
+            call_id=session.id,
+            role="user",
+            content=speech_result,
+            timestamp=now_str,
+            sequence=seq,
+        )
+        db.add(user_turn)
+        await db.commit()
+        seq += 1
+
+    # Call Gemini to generate voice response
+    system_instruction = compose_system_instruction(
+        agent_name=agent,
+        response_style="concise",
+        language="en-IN",
+    )
+
+    try:
+        gemini_res = await generate_conversation_reply(
+            message=speech_result,
+            history=history_messages,
+            system_instruction=system_instruction,
+            temperature=0.6,
+            max_history_turns=6,
+        )
+        reply_text = gemini_res.response.strip()
+    except Exception as exc:
+        logger.warning("Gemini voice response error: %s", exc)
+        reply_text = "I understood your inquiry. Let me connect you with our specialized support representative."
+
+    # Append agent turn in DB if session found
+    if session:
+        agent_turn = TranscriptItemModel(
+            call_id=session.id,
+            role="agent",
+            content=reply_text,
+            timestamp=now_str,
+            sequence=seq,
+        )
+        db.add(agent_turn)
+        await db.commit()
+
+    # Continue the conversation loop
+    escaped_reply = xml_escape(reply_text)
+    turn_action = f"https://voxora-backend-api.onrender.com/api/v1/telephony/twiml/conversation-turn?agent={urllib.parse.quote(str(agent))}"
+    xml_content = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<Response>\n'
+        f'    <Say voice="Polly.Aditi" language="en-IN">{escaped_reply}</Say>\n'
+        f'    <Gather input="speech" timeout="5" speechTimeout="auto" action="{turn_action}" method="POST">\n'
+        '        <Pause length="1"/>\n'
+        '    </Gather>\n'
+        '    <Say voice="Polly.Aditi" language="en-IN">\n'
+        '        Thank you for speaking with Voxora. Have a wonderful day. Goodbye!\n'
+        '    </Say>\n'
+        '    <Hangup/>\n'
+        '</Response>'
+    )
+    return Response(content=xml_content, media_type="application/xml")
+
 
 
 @router.api_route(
