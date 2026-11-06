@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import urllib.parse
 import urllib.request
+import urllib.error
 import json
 from typing import Dict, Any, Optional
 
@@ -100,6 +101,19 @@ class TwilioTelephonyProvider(BaseTelephonyProvider):
                     is_mock=False,
                     metadata=metadata or {},
                 )
+        except urllib.error.HTTPError as e:
+            err_body = ""
+            try:
+                raw_body = e.read().decode("utf-8")
+                err_json = json.loads(raw_body)
+                err_msg = err_json.get("message") or err_json.get("detail")
+                if err_msg:
+                    err_body = f": {err_msg}"
+                else:
+                    err_body = f": {raw_body}"
+            except Exception:
+                err_body = f": {str(e)}"
+            raise TelephonyConfigError(f"Twilio rejected call ({e.code}){err_body}") from e
         except Exception as e:
             raise TelephonyConfigError(f"Twilio call initiation failed: {str(e)}") from e
 

@@ -525,7 +525,14 @@ export async function downloadAnalyticsCsv(params?: {
 
     return { success: true, filename };
   } catch (err: unknown) {
-    return { success: false, error: String(err) };
+    const msg = String(err);
+    if (msg.includes("timed out") || msg.includes("AbortError")) {
+      return {
+        success: false,
+        error: "Connection timed out. The telephony carrier dispatch took longer than expected.",
+      };
+    }
+    return { success: false, error: msg };
   }
 }
 
@@ -621,7 +628,7 @@ export async function fetchTelephonyConfig(): Promise<TelephonyConfig | null> {
     const res = await fetch(`${API_BASE_URL}/api/v1/telephony/config`, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(15000),
     });
 
     if (!res.ok) return null;
@@ -642,7 +649,7 @@ export async function initiateTelephonyCall(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(25000),
     });
 
     const data = await res.json();
@@ -655,7 +662,14 @@ export async function initiateTelephonyCall(
 
     return { success: true, data };
   } catch (err: unknown) {
-    return { success: false, error: String(err) };
+    const msg = String(err);
+    if (msg.includes("timed out") || msg.includes("AbortError")) {
+      return {
+        success: false,
+        error: "Connection timed out. The telephony carrier dispatch took longer than expected.",
+      };
+    }
+    return { success: false, error: msg };
   }
 }
 
